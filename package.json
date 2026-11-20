@@ -1,0 +1,14 @@
+{
+  "name": "zoom-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full stack video conferencing application",
+  "scripts": {
+    "start:backend": "npm start --prefix Zoom-main/backend",
+    "dev:backend": "npm run dev --prefix Zoom-main/backend",
+    "start:frontend": "npm start --prefix Zoom-main/frontend",
+    "start:frontend:https": "npm run start:https --prefix Zoom-main/frontend",
+    "build:frontend": "npm run build --prefix Zoom-main/frontend",
+    "test": "npm test --prefix Zoom-main/frontend -- --watchAll=false"
+  }
+}

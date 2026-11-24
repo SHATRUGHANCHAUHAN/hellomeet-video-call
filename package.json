@@ -8,6 +8,7 @@
     "dev:backend": "npm run dev --prefix Zoom-main/backend",
     "start:frontend": "npm start --prefix Zoom-main/frontend",
     "start:frontend:https": "npm run start:https --prefix Zoom-main/frontend",
+    "build": "npm run build --prefix Zoom-main/frontend",
     "build:frontend": "npm run build --prefix Zoom-main/frontend",
     "test": "npm test --prefix Zoom-main/frontend -- --watchAll=false"
   }

@@ -1,0 +1,11 @@
+{
+  "buildCommand": "npm run build --prefix Zoom-main/frontend",
+  "outputDirectory": "Zoom-main/frontend/build",
+  "installCommand": "npm install --prefix Zoom-main/frontend",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

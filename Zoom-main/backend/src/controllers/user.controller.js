@@ -26,66 +26,71 @@ const login = async (req, res) => {
 
     try {
         if (isDbConnected()) {
-            // Case-insensitive username lookup in MongoDB
-            const user = await User.findOne({
-                username: { $regex: new RegExp(`^${trimmedUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-            });
-
-            if (!user) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid username or password"
+            try {
+                // Case-insensitive username lookup in MongoDB
+                const user = await User.findOne({
+                    username: { $regex: new RegExp(`^${trimmedUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
                 });
-            }
 
-            const isPasswordCorrect = await bcrypt.compare(password, user.password);
-
-            if (!isPasswordCorrect) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid username or password"
-                });
-            }
-
-            const token = crypto.randomBytes(32).toString("hex");
-            user.token = token;
-            await user.save();
-
-            return res.status(httpStatus.OK).json({
-                message: "Login successful",
-                token: token,
-                user: {
-                    name: user.name,
-                    username: user.username
+                if (!user) {
+                    return res.status(httpStatus.UNAUTHORIZED).json({
+                        message: "Invalid username or password"
+                    });
                 }
-            });
-        } else {
-            // In-Memory Fallback
-            console.log(`[In-Memory DB] Logging in user: ${trimmedUsername}`);
-            const user = memUsers.get(trimmedUsername);
-            if (!user) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid username or password"
-                });
-            }
 
-            const isPasswordCorrect = await bcrypt.compare(password, user.password);
-            if (!isPasswordCorrect) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid username or password"
-                });
-            }
+                const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
-            const token = crypto.randomBytes(32).toString("hex");
-            user.token = token;
-
-            return res.status(httpStatus.OK).json({
-                message: "Login successful",
-                token: token,
-                user: {
-                    name: user.name,
-                    username: user.username
+                if (!isPasswordCorrect) {
+                    return res.status(httpStatus.UNAUTHORIZED).json({
+                        message: "Invalid username or password"
+                    });
                 }
+
+                const token = crypto.randomBytes(32).toString("hex");
+                user.token = token;
+                await user.save();
+
+                return res.status(httpStatus.OK).json({
+                    message: "Login successful",
+                    token: token,
+                    user: {
+                        name: user.name,
+                        username: user.username
+                    }
+                });
+            } catch (dbErr) {
+                console.warn("MongoDB query error, falling back to In-Memory DB:", dbErr.message);
+                // Fall through to In-Memory logic below
+            }
+        }
+
+        // In-Memory Fallback
+        console.log(`[In-Memory DB] Logging in user: ${trimmedUsername}`);
+        const user = memUsers.get(trimmedUsername);
+        if (!user) {
+            return res.status(httpStatus.UNAUTHORIZED).json({
+                message: "Invalid username or password"
             });
         }
+
+        const isPasswordCorrect = await bcrypt.compare(password, user.password);
+        if (!isPasswordCorrect) {
+            return res.status(httpStatus.UNAUTHORIZED).json({
+                message: "Invalid username or password"
+            });
+        }
+
+        const token = crypto.randomBytes(32).toString("hex");
+        user.token = token;
+
+        return res.status(httpStatus.OK).json({
+            message: "Login successful",
+            token: token,
+            user: {
+                name: user.name,
+                username: user.username
+            }
+        });
     } catch (e) {
         console.error("Login error:", e);
         return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({
@@ -120,50 +125,55 @@ const register = async (req, res) => {
 
     try {
         if (isDbConnected()) {
-            const existingUser = await User.findOne({
-                username: { $regex: new RegExp(`^${trimmedUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-            });
-
-            if (existingUser) {
-                return res.status(httpStatus.CONFLICT).json({
-                    message: "User already exists with this username"
+            try {
+                const existingUser = await User.findOne({
+                    username: { $regex: new RegExp(`^${trimmedUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
                 });
-            }
 
-            const hashedPassword = await bcrypt.hash(password, 10);
+                if (existingUser) {
+                    return res.status(httpStatus.CONFLICT).json({
+                        message: "User already exists with this username"
+                    });
+                }
 
-            const newUser = new User({
-                name: trimmedName,
-                username: trimmedUsername,
-                password: hashedPassword
-            });
+                const hashedPassword = await bcrypt.hash(password, 10);
 
-            await newUser.save();
-
-            return res.status(httpStatus.CREATED).json({
-                message: "User registered successfully"
-            });
-        } else {
-            // In-Memory Fallback
-            console.log(`[In-Memory DB] Registering user: ${trimmedUsername}`);
-            if (memUsers.has(trimmedUsername)) {
-                return res.status(httpStatus.CONFLICT).json({
-                    message: "User already exists with this username"
+                const newUser = new User({
+                    name: trimmedName,
+                    username: trimmedUsername,
+                    password: hashedPassword
                 });
+
+                await newUser.save();
+
+                return res.status(httpStatus.CREATED).json({
+                    message: "User registered successfully"
+                });
+            } catch (dbErr) {
+                console.warn("MongoDB register error, falling back to In-Memory DB:", dbErr.message);
+                // Fall through to In-Memory logic below
             }
+        }
 
-            const hashedPassword = await bcrypt.hash(password, 10);
-            memUsers.set(trimmedUsername, {
-                name: trimmedName,
-                username: trimmedUsername,
-                password: hashedPassword,
-                token: null
-            });
-
-            return res.status(httpStatus.CREATED).json({
-                message: "User registered successfully"
+        // In-Memory Fallback
+        console.log(`[In-Memory DB] Registering user: ${trimmedUsername}`);
+        if (memUsers.has(trimmedUsername)) {
+            return res.status(httpStatus.CONFLICT).json({
+                message: "User already exists with this username"
             });
         }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        memUsers.set(trimmedUsername, {
+            name: trimmedName,
+            username: trimmedUsername,
+            password: hashedPassword,
+            token: null
+        });
+
+        return res.status(httpStatus.CREATED).json({
+            message: "User registered successfully"
+        });
     } catch (e) {
         console.error("Register error:", e);
         return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({
@@ -185,40 +195,40 @@ const getUserHistory = async (req, res) => {
 
     try {
         if (isDbConnected()) {
-            const user = await User.findOne({ token: cleanToken });
-            if (!user) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid or expired session. Please login again."
-                });
-            }
+            try {
+                const user = await User.findOne({ token: cleanToken });
+                if (user) {
+                    const meetings = await Meeting.find({ user_id: user.username })
+                        .sort({ date: -1 })
+                        .lean();
 
-            const meetings = await Meeting.find({ user_id: user.username })
-                .sort({ date: -1 })
-                .lean();
-
-            return res.status(httpStatus.OK).json(meetings);
-        } else {
-            // In-Memory Fallback
-            let foundUser = null;
-            for (const u of memUsers.values()) {
-                if (u.token === cleanToken) {
-                    foundUser = u;
-                    break;
+                    return res.status(httpStatus.OK).json(meetings);
                 }
+            } catch (dbErr) {
+                console.warn("MongoDB query history error:", dbErr.message);
             }
-
-            if (!foundUser) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid or expired session. Please login again."
-                });
-            }
-
-            const userMeetings = memMeetings
-                .filter(m => m.user_id === foundUser.username)
-                .sort((a, b) => new Date(b.date) - new Date(a.date));
-
-            return res.status(httpStatus.OK).json(userMeetings);
         }
+
+        // In-Memory Fallback
+        let foundUser = null;
+        for (const u of memUsers.values()) {
+            if (u.token === cleanToken) {
+                foundUser = u;
+                break;
+            }
+        }
+
+        if (!foundUser) {
+            return res.status(httpStatus.UNAUTHORIZED).json({
+                message: "Invalid or expired session. Please login again."
+            });
+        }
+
+        const userMeetings = memMeetings
+            .filter((m) => m.user_id === foundUser.username)
+            .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        return res.status(httpStatus.OK).json(userMeetings);
     } catch (e) {
         console.error("Get history error:", e);
         return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({
@@ -247,54 +257,54 @@ const addToHistory = async (req, res) => {
 
     try {
         if (isDbConnected()) {
-            const user = await User.findOne({ token: cleanToken });
-            if (!user) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid or expired session"
-                });
-            }
+            try {
+                const user = await User.findOne({ token: cleanToken });
+                if (user) {
+                    const newMeeting = new Meeting({
+                        user_id: user.username,
+                        meetingCode: meeting_code.trim()
+                    });
 
-            const newMeeting = new Meeting({
-                user_id: user.username,
-                meetingCode: meeting_code.trim()
-            });
+                    await newMeeting.save();
 
-            await newMeeting.save();
-
-            return res.status(httpStatus.CREATED).json({
-                message: "Added code to history",
-                meeting: newMeeting
-            });
-        } else {
-            // In-Memory Fallback
-            let foundUser = null;
-            for (const u of memUsers.values()) {
-                if (u.token === cleanToken) {
-                    foundUser = u;
-                    break;
+                    return res.status(httpStatus.CREATED).json({
+                        message: "Added code to history",
+                        meeting: newMeeting
+                    });
                 }
+            } catch (dbErr) {
+                console.warn("MongoDB add to history error:", dbErr.message);
             }
+        }
 
-            if (!foundUser) {
-                return res.status(httpStatus.UNAUTHORIZED).json({
-                    message: "Invalid or expired session"
-                });
+        // In-Memory Fallback
+        let foundUser = null;
+        for (const u of memUsers.values()) {
+            if (u.token === cleanToken) {
+                foundUser = u;
+                break;
             }
+        }
 
-            const newMeeting = {
-                _id: crypto.randomBytes(12).toString("hex"),
-                user_id: foundUser.username,
-                meetingCode: meeting_code.trim(),
-                date: new Date()
-            };
-
-            memMeetings.push(newMeeting);
-
-            return res.status(httpStatus.CREATED).json({
-                message: "Added code to history",
-                meeting: newMeeting
+        if (!foundUser) {
+            return res.status(httpStatus.UNAUTHORIZED).json({
+                message: "Invalid or expired session"
             });
         }
+
+        const newMeeting = {
+            _id: crypto.randomBytes(12).toString("hex"),
+            user_id: foundUser.username,
+            meetingCode: meeting_code.trim(),
+            date: new Date()
+        };
+
+        memMeetings.push(newMeeting);
+
+        return res.status(httpStatus.CREATED).json({
+            message: "Added code to history",
+            meeting: newMeeting
+        });
     } catch (e) {
         console.error("Add to history error:", e);
         return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({

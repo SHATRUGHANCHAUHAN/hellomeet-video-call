@@ -7,6 +7,7 @@ import Paper from '@mui/material/Paper';
 import Box from '@mui/material/Box';
 import Grid from '@mui/material/Grid';
 import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
+import CircularProgress from '@mui/material/CircularProgress';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import { AuthContext } from '../contexts/AuthContext';
 import { Snackbar, Alert } from '@mui/material';
@@ -36,12 +37,26 @@ export default function Authentication() {
         if (e && e.preventDefault) e.preventDefault();
         setError("");
 
-        if (!username.trim() || !password) {
-            setError("Please fill in all required fields.");
+        const cleanUsername = username.trim();
+        const cleanPassword = password;
+        const cleanName = name.trim();
+
+        if (!cleanUsername || !cleanPassword) {
+            setError("Please fill in both username and password.");
             return;
         }
 
-        if (formState === 1 && !name.trim()) {
+        if (cleanUsername.length < 3) {
+            setError("Username must be at least 3 characters long.");
+            return;
+        }
+
+        if (cleanPassword.length < 4) {
+            setError("Password must be at least 4 characters long.");
+            return;
+        }
+
+        if (formState === 1 && !cleanName) {
             setError("Full name is required to register.");
             return;
         }
@@ -49,9 +64,9 @@ export default function Authentication() {
         setLoading(true);
         try {
             if (formState === 0) {
-                await handleLogin(username.trim(), password);
+                await handleLogin(cleanUsername, cleanPassword);
             } else if (formState === 1) {
-                const regMsg = await handleRegister(name.trim(), username.trim(), password);
+                const regMsg = await handleRegister(cleanName, cleanUsername, cleanPassword);
                 setMessage(regMsg || "Registration successful! You can now log in.");
                 setOpen(true);
                 setFormState(0);
@@ -61,10 +76,10 @@ export default function Authentication() {
             console.error("Auth error:", err);
             let serverMsg = err.response?.data?.message;
             if (!serverMsg) {
-                if (err.code === "ECONNABORTED") {
-                    serverMsg = "Server connection timed out. The server may be waking up—please try again.";
+                if (err.code === "ECONNABORTED" || (err.message && err.message.includes("timeout"))) {
+                    serverMsg = "Server took too long to respond. The cloud server may be waking up from sleep—please try again in a few seconds.";
                 } else if (!err.response) {
-                    serverMsg = "Cannot reach server. If using local backend, please run 'npm run dev:backend'. If using cloud, check your internet connection.";
+                    serverMsg = "Cannot connect to server. Please check your internet connection or start your local backend ('npm run dev:backend').";
                 } else {
                     serverMsg = err.message || "Authentication failed. Please try again.";
                 }
@@ -119,12 +134,14 @@ export default function Authentication() {
                             <Button
                                 variant={formState === 0 ? "contained" : "outlined"}
                                 onClick={() => handleSwitchForm(0)}
+                                disabled={loading}
                             >
                                 Sign In
                             </Button>
                             <Button
                                 variant={formState === 1 ? "contained" : "outlined"}
                                 onClick={() => handleSwitchForm(1)}
+                                disabled={loading}
                             >
                                 Sign Up
                             </Button>
@@ -141,7 +158,9 @@ export default function Authentication() {
                                     name="name"
                                     value={name}
                                     autoFocus
+                                    disabled={loading}
                                     onChange={(e) => setName(e.target.value)}
+                                    placeholder="e.g. John Doe"
                                 />
                             )}
 
@@ -154,7 +173,9 @@ export default function Authentication() {
                                 name="username"
                                 value={username}
                                 autoFocus={formState === 0}
+                                disabled={loading}
                                 onChange={(e) => setUsername(e.target.value)}
+                                placeholder="Choose a username"
                             />
                             <TextField
                                 margin="normal"
@@ -165,7 +186,9 @@ export default function Authentication() {
                                 value={password}
                                 type="password"
                                 id="password"
+                                disabled={loading}
                                 onChange={(e) => setPassword(e.target.value)}
+                                placeholder="At least 4 characters"
                             />
 
                             {error && (
@@ -174,15 +197,30 @@ export default function Authentication() {
                                 </Alert>
                             )}
 
+                            {loading && (
+                                <Alert severity="info" sx={{ mt: 2, display: 'flex', alignItems: 'center' }}>
+                                    Connecting to authentication server... (cloud servers may take a moment to wake up).
+                                </Alert>
+                            )}
+
                             <Button
                                 type="submit"
                                 fullWidth
                                 variant="contained"
-                                sx={{ mt: 3, mb: 2 }}
+                                sx={{ mt: 3, mb: 2, py: 1.2 }}
                                 disabled={loading}
                                 onClick={handleAuth}
                             >
-                                {loading ? "Please wait..." : formState === 0 ? "Login" : "Register"}
+                                {loading ? (
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <CircularProgress size={20} color="inherit" />
+                                        <span>Please wait...</span>
+                                    </Box>
+                                ) : formState === 0 ? (
+                                    "Sign In"
+                                ) : (
+                                    "Create Account"
+                                )}
                             </Button>
                         </Box>
                     </Box>
@@ -191,7 +229,7 @@ export default function Authentication() {
 
             <Snackbar
                 open={open}
-                autoHideDuration={4000}
+                autoHideDuration={5000}
                 onClose={() => setOpen(false)}
             >
                 <Alert onClose={() => setOpen(false)} severity="success" sx={{ width: '100%' }}>

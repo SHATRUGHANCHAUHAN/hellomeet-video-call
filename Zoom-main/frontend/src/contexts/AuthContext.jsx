@@ -2,84 +2,171 @@ import axios from "axios";
 import httpStatus from "http-status";
 import { createContext, useContext, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import server, { LOCAL_BACKEND_URL, CLOUD_BACKEND_URL } from "../environment";
+import { getBackendCandidates, CLOUD_BACKEND_URL } from "../environment";
 
 export const AuthContext = createContext({});
 
-const primaryBase = server.replace(/\/+$/, "");
-const fallbackBase = primaryBase.includes("localhost") || primaryBase.includes("127.0.0.1")
-    ? CLOUD_BACKEND_URL
-    : LOCAL_BACKEND_URL;
+// Track the last successfully contacted backend host
+let activeBackendBase = null;
 
-// Resilient API post helper: tries primary server; if unreachable due to network error, tries fallback server
-const apiPost = async (endpoint, data, config = {}) => {
-    try {
-        const res = await axios.post(`${primaryBase}/api/v1/users${endpoint}`, data, {
-            ...config,
-            timeout: 30000
-        });
-        return res;
-    } catch (err) {
-        const isNetworkErr = !err.response || err.code === "ERR_NETWORK" || err.code === "ECONNREFUSED";
-        if (isNetworkErr && fallbackBase && fallbackBase !== primaryBase) {
-            console.warn(`Primary server (${primaryBase}) unreachable. Retrying with fallback (${fallbackBase})...`);
-            try {
-                const fallbackRes = await axios.post(`${fallbackBase}/api/v1/users${endpoint}`, data, {
-                    ...config,
-                    timeout: 45000
-                });
-                return fallbackRes;
-            } catch (fallbackErr) {
-                throw fallbackErr.response ? fallbackErr : err;
-            }
-        }
-        throw err;
+const getCandidateList = () => {
+    const rawList = getBackendCandidates() || [];
+    const candidates = rawList
+        .filter(Boolean)
+        .map((url) => String(url).replace(/\/+$/, ""));
+
+    // If we already know a working backend, place it first
+    if (activeBackendBase && candidates.includes(activeBackendBase)) {
+        return [activeBackendBase, ...candidates.filter((c) => c !== activeBackendBase)];
     }
+
+    if (!candidates.includes(CLOUD_BACKEND_URL)) {
+        candidates.push(CLOUD_BACKEND_URL);
+    }
+
+    return candidates;
 };
 
-// Resilient API get helper: tries primary server; if unreachable, tries fallback server
-const apiGet = async (endpoint, config = {}) => {
-    try {
-        const res = await axios.get(`${primaryBase}/api/v1/users${endpoint}`, {
-            ...config,
-            timeout: 30000
-        });
-        return res;
-    } catch (err) {
-        const isNetworkErr = !err.response || err.code === "ERR_NETWORK" || err.code === "ECONNREFUSED";
-        if (isNetworkErr && fallbackBase && fallbackBase !== primaryBase) {
-            console.warn(`Primary server (${primaryBase}) unreachable. Retrying with fallback (${fallbackBase})...`);
-            try {
-                const fallbackRes = await axios.get(`${fallbackBase}/api/v1/users${endpoint}`, {
-                    ...config,
-                    timeout: 45000
-                });
-                return fallbackRes;
-            } catch (fallbackErr) {
-                throw fallbackErr.response ? fallbackErr : err;
-            }
-        }
-        throw err;
+// Returns true if response body is HTML (e.g. from Vercel SPA rewrite or proxy error page)
+const isHtmlResponse = (data) => {
+    if (typeof data === "string") {
+        const trimmed = data.trim().toLowerCase();
+        return trimmed.startsWith("<!doctype") || trimmed.startsWith("<html") || trimmed.startsWith("<head");
     }
+    return false;
+};
+
+// Resilient API POST helper with multi-candidate failover
+const apiPost = async (endpoint, data, config = {}) => {
+    const candidates = getCandidateList();
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+        const base = candidates[i];
+        const isCloud = base.includes("onrender.com");
+        const timeout = isCloud ? 60000 : 25000;
+
+        try {
+            console.log(`[Auth API] POST -> ${base}/api/v1/users${endpoint}`);
+            const res = await axios.post(`${base}/api/v1/users${endpoint}`, data, {
+                ...config,
+                timeout,
+                validateStatus: (status) => status < 500 // Don't throw on 302, 400, 401, 404, 409
+            });
+
+            // If response is HTML, this host is serving a static frontend or error page, not the API
+            if (isHtmlResponse(res.data) || res.status === 502 || res.status === 503 || res.status === 504) {
+                console.warn(`[Auth API] Candidate ${base} returned invalid response (status ${res.status}). Trying next candidate...`);
+                continue;
+            }
+
+            // Legitimate client-side validation error from the API (e.g. Wrong password, User already exists)
+            if (res.status >= 400) {
+                activeBackendBase = base;
+                const errMsg = res.data?.message || `Request failed with status ${res.status}`;
+                const clientErr = new Error(errMsg);
+                clientErr.response = res;
+                throw clientErr;
+            }
+
+            // Success! Remember this working backend for subsequent requests
+            activeBackendBase = base;
+            return res;
+        } catch (err) {
+            // If it's a 4xx error from the auth controller, do not retry other servers—it is an intentional response
+            if (err.response && err.response.status >= 400 && err.response.status < 500 && !isHtmlResponse(err.response.data)) {
+                throw err;
+            }
+
+            lastError = err;
+            console.warn(`[Auth API] Error reaching ${base}: ${err.message}. Trying next candidate...`);
+        }
+    }
+
+    throw lastError || new Error("Cannot reach authentication server. Please check your internet connection.");
+};
+
+// Resilient API GET helper with multi-candidate failover
+const apiGet = async (endpoint, config = {}) => {
+    const candidates = getCandidateList();
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+        const base = candidates[i];
+        const isCloud = base.includes("onrender.com");
+        const timeout = isCloud ? 60000 : 25000;
+
+        try {
+            const res = await axios.get(`${base}/api/v1/users${endpoint}`, {
+                ...config,
+                timeout,
+                validateStatus: (status) => status < 500
+            });
+
+            if (isHtmlResponse(res.data) || res.status === 502 || res.status === 503 || res.status === 504) {
+                continue;
+            }
+
+            if (res.status >= 400) {
+                activeBackendBase = base;
+                const errMsg = res.data?.message || `Request failed with status ${res.status}`;
+                const clientErr = new Error(errMsg);
+                clientErr.response = res;
+                throw clientErr;
+            }
+
+            activeBackendBase = base;
+            return res;
+        } catch (err) {
+            if (err.response && err.response.status >= 400 && err.response.status < 500 && !isHtmlResponse(err.response.data)) {
+                throw err;
+            }
+            lastError = err;
+        }
+    }
+
+    throw lastError || new Error("Cannot reach authentication server.");
 };
 
 export const AuthProvider = ({ children }) => {
     const authContext = useContext(AuthContext);
-    const [userData, setUserData] = useState(authContext || {});
+    const [userData, setUserData] = useState(() => {
+        try {
+            const saved = localStorage.getItem("user");
+            if (saved) return JSON.parse(saved);
+        } catch {}
+        return authContext || {};
+    });
     const router = useNavigate();
 
     const handleRegister = async (name, username, password) => {
+        const cleanName = String(name || "").trim();
+        const cleanUsername = String(username || "").trim();
+
         try {
             const request = await apiPost("/register", {
-                name: (name || "").trim(),
-                username: (username || "").trim(),
+                name: cleanName,
+                username: cleanUsername,
                 password: password
             });
+
+            // Handle legacy backend status 302 or explicit "already exists" payload
+            if (
+                request.status === 302 ||
+                (request.data?.message && request.data.message.toLowerCase().includes("already exists"))
+            ) {
+                const err = new Error(request.data?.message || "User already exists with this username");
+                err.response = { data: { message: request.data?.message || "User already exists with this username" } };
+                throw err;
+            }
 
             if (request.status === httpStatus.CREATED || request.status === 200 || request.status === 201) {
                 return request.data?.message || "User registered successfully";
             }
-            return request.data?.message;
+
+            const err = new Error(request.data?.message || "Registration failed");
+            err.response = request;
+            throw err;
         } catch (err) {
             console.error("Register request failed:", err);
             throw err;
@@ -87,22 +174,35 @@ export const AuthProvider = ({ children }) => {
     };
 
     const handleLogin = async (username, password) => {
+        const cleanUsername = String(username || "").trim();
+
         try {
             const request = await apiPost("/login", {
-                username: (username || "").trim(),
+                username: cleanUsername,
                 password: password
             });
 
             if (request.status === httpStatus.OK || request.status === 200) {
-                const token = request.data.token;
-                localStorage.setItem("token", token);
-                if (request.data.user) {
-                    localStorage.setItem("user", JSON.stringify(request.data.user));
-                    setUserData(request.data.user);
+                const token = request.data?.token;
+                if (!token || typeof token !== "string" || isHtmlResponse(token)) {
+                    throw new Error("Invalid response received from authentication server.");
                 }
+
+                localStorage.setItem("token", token);
+
+                // Preserve or construct user profile
+                const userObj = request.data.user || {
+                    name: cleanUsername,
+                    username: cleanUsername
+                };
+                localStorage.setItem("user", JSON.stringify(userObj));
+                setUserData(userObj);
+
                 router("/home");
                 return request.data;
             }
+
+            throw new Error(request.data?.message || "Login failed");
         } catch (err) {
             console.error("Login request failed:", err);
             throw err;
